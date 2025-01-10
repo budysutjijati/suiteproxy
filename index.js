@@ -6,7 +6,6 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit'); // Import rate limiter
 const ipRangeCheck = require('ip-range-check'); // Import IP range checker
 const NetSuiteAPI = require('netsuite-api');
-const dns = require('dns');
 
 const app = express();
 const PORT = 3000;
@@ -15,25 +14,21 @@ const PORT = 3000;
 app.use(cors());
 app.use(bodyParser.json());
 
-// Define the IP ranges to exclude (wildcards or CIDR notation)
-const excludedIPRanges = ['192.168.222.*'];
-
-dns.lookup(process.env.DDNS, (err, address) => {
-	if (!err) {
-		excludedIPRanges.push(address);
-		console.log(`Resolved home IP: ${address}`);
-	}
-});
+// Define the fixed IP ranges to exclude (wildcards or CIDR notation)
+const excludedIPRanges = ['95.99.68.87', '192.168.222.0/24', '127.0.0.1']; // Add fixed IPs or ranges here
 
 // Rate limiting configuration
 const limiter = rateLimit({
 	windowMs: 15 * 60 * 1000, // 15-minute window
-	max: process.env.RATE_LIMIT_MAX, // Limit each IP to 15 requests per window
+	max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 5, // Default to 5 requests if the environment variable is not set
 	message: {
 		error: 'Too many requests. Please try again later.',
 	},
 	skip: (req, res) => {
-		return ipRangeCheck(req.ip, excludedIPRanges); // Exclude matching IP ranges
+		const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.ip; // Use x-forwarded-for or fallback to req.ip
+		const isExcluded = ipRangeCheck(clientIp, excludedIPRanges); // Check if IP is in the excluded list
+		console.log(`Client IP: ${clientIp}, Is Excluded: ${isExcluded}`); // Debug log
+		return isExcluded; // Skip rate limiting if IP is excluded
 	},
 });
 
@@ -53,15 +48,29 @@ const netsuiteAPI = new NetSuiteAPI(config);
 
 /**
  * Proxy endpoint
- * Hardcoded transaction ID example
  */
 app.get('/suiteproxy', async (req, res) => {
 	try {
-		// Hardcoded transaction ID
-		const hardcodedTransactionId = 2615;
+		// Extract transaction ID from query parameters
+		const { transactionid } = req.query;
 
-		// Construct the RESTlet URL using the updated RESTLET_URL from .env
-		const restletUrl = `${process.env.RESTLET_URL}&transactionid=${hardcodedTransactionId}`;
+		// Validate transaction ID
+		if (!transactionid) {
+			return res.status(400).json({
+				error: 'Missing required query parameter: transactionid.',
+			});
+		}
+
+		const parsedTransactionId = parseInt(transactionid, 10);
+
+		if (isNaN(parsedTransactionId)) {
+			return res.status(400).json({
+				error: 'Invalid transactionid. Must be a valid number.',
+			});
+		}
+
+		// Construct the RESTlet URL using the provided transaction ID
+		const restletUrl = `${process.env.RESTLET_URL}&transactionid=${parsedTransactionId}`;
 
 		// Make a GET request to the RESTlet using the NetSuite API client
 		const response = await netsuiteAPI.get({
@@ -69,11 +78,11 @@ app.get('/suiteproxy', async (req, res) => {
 		});
 
 		// Relay the RESTlet response to the client
-		res.status(200).json(response);
+		return res.status(200).json(response);
 	} catch (error) {
 		console.error('Error relaying request to NetSuite:', error.message);
-		res.status(500).json({
-			error: 'Error communicating with NetSuite RESTlet',
+		return res.status(500).json({
+			error: 'Error communicating with NetSuite RESTlet.',
 			details: error.message,
 		});
 	}
