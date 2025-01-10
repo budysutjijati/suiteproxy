@@ -1,38 +1,40 @@
 require('dotenv').config(); // Load environment variables
-
 const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const rateLimit = require('express-rate-limit'); // Import rate limiter
-const ipRangeCheck = require('ip-range-check'); // Import IP range checker
+const rateLimit = require('express-rate-limit');
+const ipRangeCheck = require('ip-range-check');
 const NetSuiteAPI = require('netsuite-api');
+const dayjs = require('dayjs');
+const customParseFormat = require('dayjs/plugin/customParseFormat');
+
+// Extend Day.js with the CustomParseFormat plugin
+dayjs.extend(customParseFormat);
 
 const app = express();
-const PORT = 3000;
-
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
+const PORT = process.env.PORT || 3000;
 
 // Define the fixed IP ranges to exclude (wildcards or CIDR notation)
-const excludedIPRanges = ['95.99.68.87', '192.168.222.0/24', '127.0.0.1']; // Add fixed IPs or ranges here
+const excludedIPRanges = ['95.99.68.87', '192.168.222.0/24']; // Add fixed IPs or ranges here
 
 // Rate limiting configuration
 const limiter = rateLimit({
 	windowMs: 15 * 60 * 1000, // 15-minute window
-	max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 5, // Default to 5 requests if the environment variable is not set
+	max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 5, // Default to 5 requests if env variable is missing
 	message: {
 		error: 'Too many requests. Please try again later.',
 	},
 	skip: (req, res) => {
-		const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.ip; // Use x-forwarded-for or fallback to req.ip
-		const isExcluded = ipRangeCheck(clientIp, excludedIPRanges); // Check if IP is in the excluded list
-		console.log(`Client IP: ${clientIp}, Is Excluded: ${isExcluded}`); // Debug log
-		return isExcluded; // Skip rate limiting if IP is excluded
+		let clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
+
+		// Normalize IPv6 loopback to IPv4
+		if (clientIp === '::1') {
+			clientIp = '127.0.0.1';
+		}
+
+		return ipRangeCheck(clientIp, excludedIPRanges); // Skip rate limiting if IP is excluded
 	},
 });
 
-// Apply rate limiter to all requests
+// Apply rate limiter to all routes
 app.use(limiter);
 
 // NetSuite API configuration
@@ -47,40 +49,80 @@ const config = {
 const netsuiteAPI = new NetSuiteAPI(config);
 
 /**
- * Proxy endpoint
+ * SuiteProxy route
  */
 app.get('/suiteproxy', async (req, res) => {
 	try {
-		// Extract transaction ID from query parameters
-		const { transactionid } = req.query;
+		// Extract query parameters
+		const { type, id, customerid, start, end } = req.query;
 
-		// Validate transaction ID
-		if (!transactionid) {
-			return res.status(400).json({
-				error: 'Missing required query parameter: transactionid.',
-			});
+		// Validate the "type" parameter
+		if (!type) {
+			return res.status(400).json({ error: 'Missing required query parameter: type.' });
 		}
 
-		const parsedTransactionId = parseInt(transactionid, 10);
+		// Construct the RESTlet URL
+		const restletUrl = new URL(`${process.env.RESTLET_URL}`);
+		restletUrl.searchParams.append('type', type);
 
-		if (isNaN(parsedTransactionId)) {
-			return res.status(400).json({
-				error: 'Invalid transactionid. Must be a valid number.',
-			});
+		// Handle transaction requests
+		if (type === 'transaction') {
+			if (!id) {
+				return res.status(400).json({ error: 'Missing required query parameter: id.' });
+			}
+
+			const parsedId = parseInt(id, 10);
+			if (isNaN(parsedId)) {
+				return res.status(400).json({ error: 'Invalid id. Must be a valid number.' });
+			}
+
+			restletUrl.searchParams.append('id', parsedId);
 		}
+		// Handle statement requests
+		else if (type === 'statement') {
+			if (!customerid) {
+				return res.status(400).json({ error: 'Missing required query parameter: customerid.' });
+			}
 
-		// Construct the RESTlet URL using the provided transaction ID
-		const restletUrl = `${process.env.RESTLET_URL}&transactionid=${parsedTransactionId}`;
+			const parsedCustomerId = parseInt(customerid, 10);
+			if (isNaN(parsedCustomerId)) {
+				return res.status(400).json({ error: 'Invalid customerid. Must be a valid number.' });
+			}
+
+			restletUrl.searchParams.append('customerid', parsedCustomerId);
+
+			// Validate and append start date
+			if (!start) {
+				return res.status(400).json({ error: 'Missing required query parameter: start.' });
+			}
+			if (!dayjs(start, 'DD/MM/YYYY', true).isValid()) {
+				return res.status(400).json({
+					error: `Invalid start format. Expected DD/MM/YYYY but received: ${start}.`,
+				});
+			}
+			restletUrl.searchParams.append('start', start);
+
+			// Validate and append end date
+			if (!end) {
+				return res.status(400).json({ error: 'Missing required query parameter: end.' });
+			}
+			if (!dayjs(end, 'DD/MM/YYYY', true).isValid()) {
+				return res.status(400).json({
+					error: `Invalid end format. Expected DD/MM/YYYY but received: ${end}.`,
+				});
+			}
+			restletUrl.searchParams.append('end', end);
+		} else {
+			return res.status(400).json({ error: 'Invalid type. Valid values are "transaction" or "statement".' });
+		}
 
 		// Make a GET request to the RESTlet using the NetSuite API client
-		const response = await netsuiteAPI.get({
-			url: restletUrl,
-		});
+		const response = await netsuiteAPI.get({ url: restletUrl.toString() });
 
 		// Relay the RESTlet response to the client
 		return res.status(200).json(response);
 	} catch (error) {
-		console.error('Error relaying request to NetSuite:', error.message);
+		console.error(`Error relaying request to NetSuite: ${error.message}`);
 		return res.status(500).json({
 			error: 'Error communicating with NetSuite RESTlet.',
 			details: error.message,
@@ -90,5 +132,5 @@ app.get('/suiteproxy', async (req, res) => {
 
 // Start the server
 app.listen(PORT, () => {
-	console.log(`Proxy server is running at http://localhost:${PORT}`);
+	console.log(`SuiteProxy server is running at http://localhost:${PORT}`);
 });
