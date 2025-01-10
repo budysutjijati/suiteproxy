@@ -13,7 +13,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Define the fixed IP ranges to exclude (wildcards or CIDR notation)
-const excludedIPRanges = ['95.99.68.87', '192.168.222.0/24']; // Add fixed IPs or ranges here
+const excludedIPRanges = ['45.88.10.78', '192.168.1.0/24']; // Add fixed IPs or ranges here
 
 // Rate limiting configuration
 const limiter = rateLimit({
