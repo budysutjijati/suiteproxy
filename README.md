@@ -94,7 +94,8 @@ SuiteProxy is a lightweight middleware application that securely interacts with 
 
 3. Create a .env file in the root directory with the following variables:
 
-   ```PORT=3000
+   ```
+   PORT=3000
    RATE_LIMIT_MAX=5
    ACCOUNT_ID=your_netsuite_account_id
    CONSUMER_KEY=your_netsuite_consumer_key
