@@ -71,19 +71,17 @@ Interact with NetSuite RESTlets to retrieve transactions or customer statements.
 
 
 ## Example Requests:
-1.	Retrieve a transaction:
+1. Retrieve a transaction:
+   ```
+   GET /suiteproxy?type=transaction&id=10410
 
-    GET /suiteproxy?type=transaction&id=10410
+2. Retrieve a transaction PDF:
+   ```
+   GET /suiteproxy?type=transaction&id=10410&file=pdf
 
-
-2.	Retrieve a transaction PDF:
- 
-    GET /suiteproxy?type=transaction&id=10410&file=pdf
-
-
-3.	Retrieve a customer statement:
-
-    GET /suiteproxy?type=statement&customerid=1397&start=01/01/2025&end=31/01/2025
+3. Retrieve a customer statement:
+   ```
+   GET /suiteproxy?type=statement&customerid=1397&start=01/01/2025&end=31/01/2025
 
 **Response:**
 - Success: JSON data or PDF file.
